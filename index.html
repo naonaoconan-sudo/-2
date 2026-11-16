@@ -1,0 +1,74 @@
+<!DOCTYPE html><html lang="ja"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#073b78"><link rel="manifest" href="./manifest.json">
+<title>近鉄 鉄道運転シミュレーション</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0c1421;color:#f4f7fb;font-family:system-ui,Meiryo,sans-serif}
+header{padding:10px 14px;background:#073b78;font-weight:900;font-size:20px;display:flex;justify-content:space-between;align-items:center}
+main{max-width:1000px;margin:auto;padding:10px;display:grid;gap:10px}
+#view{width:100%;height:clamp(210px,42vh,390px);display:block;border:2px solid #536a84;border-radius:12px;background:#8ec8f4}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.panel{background:#1a273a;border:1px solid #405570;border-radius:10px;padding:10px}
+.label{font-size:12px;color:#b7c9df}.value{font-size:clamp(22px,5vw,34px);font-weight:900;color:#63d5ff}
+.controls{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+button{border:0;border-radius:11px;padding:15px 4px;font-size:17px;font-weight:800;color:white;background:#1264c5;touch-action:manipulation}
+button:active{filter:brightness(1.25)}.brake{background:#c53b32}.coast{background:#52647c}.stop{background:#27364b}
+#msg{font-weight:700;color:#ffe08b;min-height:24px}.progress{height:9px;background:#35465d;border-radius:9px;overflow:hidden;margin-top:7px}.fill{height:100%;background:#48dc75;width:0}
+@media(max-width:450px){.controls{grid-template-columns:repeat(2,1fr)}header{font-size:17px}}
+</style></head><body>
+<header><span>🚃 近鉄運転シミュレーター</span><span id="route">名古屋線</span></header>
+<main>
+<canvas id="view"></canvas>
+<section class="grid">
+<div class="panel"><div class="label">速度</div><div class="value"><span id="speed">0</span><small> km/h</small></div><div class="progress"><div class="fill" id="speedbar"></div></div></div>
+<div class="panel"><div class="label">次の駅</div><div class="value" id="next">桑名</div><div class="label">駅間距離</div><b id="dist">1.2 km</b></div>
+<div class="panel"><div class="label">制限速度</div><div class="value">70</div><div class="label">km/h</div><b id="state">停車中</b></div>
+</section>
+<section class="panel"><div id="msg">力行を押して出発！</div><div class="label">停車目標まで</div><div class="progress"><div class="fill" id="distancebar"></div></div></section>
+<section class="controls">
+<button id="p">▲ 力行</button><button id="b" class="brake">▼ ブレーキ</button><button id="c" class="coast">○ 惰行</button><button id="s" class="stop">■ 停車</button>
+</section>
+<section class="panel label">操作：力行で加速／ブレーキで減速／惰行で自然減速。駅の手前で減速して0km/hで停車しよう。キーボード：↑ ↓ Space</section>
+</main>
+<script>
+if('serviceWorker'in navigator)addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
+const canvas=document.querySelector('#view'),ctx=canvas.getContext('2d');
+let speed=0,dist=1.2,mode='停車中',station=0,run=false,last=0,offset=0;
+const stations=['桑名','近鉄四日市','津','伊勢中川'];
+const $=id=>document.getElementById(id);
+function resize(){canvas.width=canvas.clientWidth*devicePixelRatio;canvas.height=canvas.clientHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)}
+new ResizeObserver(resize).observe(canvas);resize();
+function draw(){
+ let w=canvas.clientWidth,h=canvas.clientHeight;
+ ctx.clearRect(0,0,w,h);
+ let sky=ctx.createLinearGradient(0,0,0,h);sky.addColorStop(0,'#5ba9ed');sky.addColorStop(.62,'#d9efff');sky.addColorStop(.63,'#7a8790');sky.addColorStop(1,'#333a43');ctx.fillStyle=sky;ctx.fillRect(0,0,w,h);
+ // clouds
+ ctx.fillStyle='rgba(255,255,255,.65)';for(let i=0;i<4;i++){let x=((i*170-offset*.08)%(w+100)+w+100)%(w+100)-50;ctx.beginPath();ctx.ellipse(x,35+i%2*22,38,12,0,0,7);ctx.fill()}
+ // city/buildings moving
+ for(let i=0;i<12;i++){let x=((i*95-offset*0.45)%(w+120)+w+120)%(w+120)-60;let bh=35+(i*37)%85;ctx.fillStyle=['#a9b7c5','#8598aa','#c1c6ca'][i%3];ctx.fillRect(x,h*.61-bh,45,bh);ctx.fillStyle='#dcecff';for(let y=h*.61-bh+8;y<h*.61-5;y+=15)for(let xx=x+7;xx<x+40;xx+=13)ctx.fillRect(xx,y,6,7)}
+ // ballast and rails perspective
+ ctx.fillStyle='#555b62';ctx.beginPath();ctx.moveTo(w*.42,h*.62);ctx.lineTo(w*.58,h*.62);ctx.lineTo(w*.95,h);ctx.lineTo(w*.05,h);ctx.fill();
+ ctx.strokeStyle='#c8d0d8';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(w*.47,h*.62);ctx.lineTo(w*.28,h);ctx.moveTo(w*.53,h*.62);ctx.lineTo(w*.72,h);ctx.stroke();
+ // sleepers
+ ctx.strokeStyle='#292f36';ctx.lineWidth=2;for(let i=0;i<18;i++){let t=(i/18+((offset*.001)%1))%1;let y=h*.62+t*t*h*.38;let x1=w*.47-t*w*.19,x2=w*.53+t*w*.19;ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x2,y);ctx.stroke()}
+ // overhead wire
+ ctx.strokeStyle='#303b48';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(w*.5,0);ctx.lineTo(w*.5,h*.62);ctx.moveTo(0,h*.2);ctx.lineTo(w,h*.2);ctx.stroke();
+ // cab dashboard foreground
+ ctx.fillStyle='#101a2a';ctx.fillRect(0,h*.83,w,h*.17);ctx.fillStyle='#26364c';ctx.fillRect(w*.08,h*.86,w*.84,h*.08);
+ ctx.fillStyle='#20d86a';ctx.font='bold 16px sans-serif';ctx.fillText('ATS',w*.45,h*.91);
+}
+function update(){ $('speed').textContent=Math.round(speed);$('dist').textContent=dist.toFixed(2)+' km';$('next').textContent=stations[station];$('state').textContent=mode;$('speedbar').style.width=(speed/70*100)+'%';$('distancebar').style.width=((1.2-dist)/1.2*100)+'%';}
+function set(m,msg){mode=m;$('msg').textContent=msg;run=true;update()}
+$('p').onclick=()=>set('力行中','加速中！速度制限に注意。');
+$('b').onclick=()=>set('ブレーキ中','減速中。駅に合わせて停車しよう。');
+$('c').onclick=()=>set('惰行中','惰行中。少しずつ速度が下がります。');
+$('s').onclick=()=>{speed=0;run=false;mode='停車中';$('msg').textContent='停車しました。';update()};
+document.addEventListener('keydown',e=>{if(e.key==='ArrowUp')$('p').click();if(e.key==='ArrowDown')$('b').click();if(e.code==='Space'){e.preventDefault();$('s').click()}});
+function frame(t){let dt=Math.min((t-last)/1000||0,.05);last=t;if(run){
+ if(mode==='力行中')speed=Math.min(70,speed+13*dt);
+ if(mode==='ブレーキ中')speed=Math.max(0,speed-24*dt);
+ if(mode==='惰行中')speed=Math.max(0,speed-1.2*dt);
+ dist=Math.max(0,dist-speed*dt/3600);offset+=speed*dt*2.5;
+ if(dist<=0){speed=0;run=false;mode='駅停車';$('msg').textContent=stations[station]+'駅に到着！';station=(station+1)%stations.length;dist=1.2;update()}
+ update()}draw();requestAnimationFrame(frame)}
+update();requestAnimationFrame(frame);
+</script></body></html>
